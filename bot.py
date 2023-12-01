@@ -9,6 +9,14 @@ intents.members = True  # Activer l'accès aux informations sur les membres
 # Créer un objet bot avec les intentions spécifiées
 bot = commands.Bot(command_prefix='/', intents=intents)
 
+# Ouvrir le fichier config.json
+with open('config.json', 'r') as file:
+    config = json.load(file)
+
+# Récupérer la clé "botToken"
+bot_token = config.get('botToken', None)
+
+
 def charger_notes():
     try:
         with open('notes.json', 'r') as file:
@@ -163,4 +171,4 @@ async def delete(ctx, profession):
 
 
 # Lancer le bot
-bot.run('MTE3NDA1ODI4NjY0ODEzNTcyMA.G-oErL.6cfkSMP2orFMoiwAqFacxgASnmmLCS52aceSWU')
+bot.run(bot_token)
