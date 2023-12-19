@@ -17,6 +17,7 @@ with open('config.json', 'r') as file:
 bot_token = config.get('botToken', None)
 
 
+
 def charger_notes():
     try:
         with open('notes.json', 'r') as file:
