@@ -1,22 +1,29 @@
 import mysql.connector
 import discord
 from discord.ext import commands, tasks
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+bot_token = os.getenv("TOKEN")
+db_user = os.getenv("DATABASE_USERNAME")
+db_pass = os.getenv("DATABASE_PASSWORD")
+db_host = os.getenv("DATABASE_HOST")
+db_name = os.getenv("DATABASE_NAME")
 
 intents = discord.Intents.all()
 intents.members = True # Activer l'accès aux informations sur les membres
 
 bot = commands.Bot(command_prefix="/", intents=intents)
 
-
-bot_token = "MTE4MDIyMTE2NTM1MzA1MDI4Mw.G0Fx5J.ULY5l8FQj3KxPKGyxDR3Wc4kYrdoqv3j1L1i3U"
-
 #Configuration mysql
 
 config_mysql = {
-    "user": "u170_7l1tvSzRiU",
-    "password": "R.RE^hA3S02i6f7+.3MN3O9!",
-    "host": "95.214.175.195",
-    "database": "s170_metier",
+    "user": db_user,
+    "password": db_pass,
+    "host": db_host,
+    "database": db_name,
 }
 
 def get_emoji_code(metier):
