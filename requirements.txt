@@ -1,4 +1,3 @@
 discord
 mysql_connector
 python_dotenv
-os
