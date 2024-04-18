@@ -1,6 +1,7 @@
 import mysql.connector
 import discord
-from discord.ext import commands, tasks
+from discord.ext import tasks
+from enum import Enum
 from dotenv import load_dotenv
 import os
 
@@ -11,13 +12,7 @@ db_user = os.getenv("DATABASE_USERNAME")
 db_pass = os.getenv("DATABASE_PASSWORD")
 db_host = os.getenv("DATABASE_HOST")
 db_name = os.getenv("DATABASE_NAME")
-
-intents = discord.Intents.all()
-intents.members = True # Activer l'accès aux informations sur les membres
-
-bot = commands.Bot(command_prefix="/", intents=intents)
-
-#Configuration mysql
+guild_id = os.getenv("GUILD_ID")
 
 config_mysql = {
     "user": db_user,
@@ -72,140 +67,58 @@ def get_emoji_code(metier):
     else:
         return None
 
+# This will load the permissions the bot has been granted in the previous configuration
+intents = discord.Intents.all()
+intents.message_content = True
 
+class aclient(discord.Client):
+    def __init__(self):
+        super().__init__(intents = intents)
+        self.synced = False # added to make sure that the command tree will be synced only once
+        self.added = False
 
-class MonCog(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
+    async def on_ready(self):
+        await self.wait_until_ready()
+        if not self.synced: #check if slash commands have been synced 
+            await tree.sync(guild = discord.Object(guild_id)) #guild specific: you can leave sync() blank to make it global. But it can take up to 24 hours, so test it in a specific guild.
+        self.synced = True
+        if not self.added:
+            self.added = True
+        print(f"Say hi to {self.user}!")
 
-    @commands.Cog.listener()
-    async def on_command_error(self, ctx, error):
-        if isinstance(error, commands.CommandNotFound):
-            await self.handle_unknown_command(ctx)
-            
-    def add_custom_commands(self):
-        self.bot.add_command(self.help_command)
-
-    @commands.command(name='assist')
-    async def help_command(self, ctx):
-        embed = discord.Embed(title="Commandes disponibles", description="Voici les commandes disponibles :", color=0x00ff00)
-
-        # Ajoutez des champs pour chaque commande avec une brève description
-        embed.add_field(name="/addMetier <metier> <lvl>", value="Enregistre un métier avec un niveau.")
-        embed.add_field(name="/updateMetier <metier> <lvl>", value="Met à jour le niveau d'un métier enregistré.")
-        embed.add_field(name="/searchMetier <metier>", value="Recherche et affiche les utilisateurs avec un métier spécifique.")
-        embed.add_field(name="/deleteMetier <metier>", value="Supprime un métier enregistré.")
-        embed.add_field(name="/addMetierFor <TAG UNE PERSONNE> <metier> <lvl>", value="Enregistre un métier pour un utilisateur spécifié.")
-        embed.add_field(name="/listMetier", value="Voir tous les métiers possible")
-
-        await ctx.send(embed=embed)
     
 
-    async def handle_unknown_command(self, ctx):
-        await ctx.send("Oh guignol j'connais pas cette commande, utilise /assist ou ferme-la")
+client = aclient()
+tree = discord.app_commands.CommandTree(client)
 
-
-
-@bot.command(name='addMetier', aliases=['addMetierSuggestion'])
-async def addMetier(ctx, *, args):
-    try:
-        # Diviser les arguments
-        arguments = args.split()
-
-        # Vérifier s'il y a suffisamment d'arguments
-        if len(arguments) >= 2:
-            profession = ' '.join(arguments[:-1])  # Tout sauf le dernier argument est le nom du métier
-            profession = normalize_apostrophe(profession)
-            niveau = arguments[-1]  # Le dernier argument est le niveau
-
-            # Connexion à la base de données
-            connexion_mysql = mysql.connector.connect(**config_mysql)
-
-            # Récupération de l'ID de l'utilisateur Discord qui a rentré la commande
-            discord_user_id = ctx.author.id
-
-            # Vérifier si le métier est valide en le comparant avec la table possibleMetiers
-            requete_validite_metier = "SELECT COUNT(*) as total FROM possibleMetiers WHERE name = %s"
-            valeurs_validite_metier = (profession.capitalize(),)
-
-            curseur_validite_metier = connexion_mysql.cursor(dictionary=True)
-            curseur_validite_metier.execute(requete_validite_metier, valeurs_validite_metier)
-            validite_metier_resultat = curseur_validite_metier.fetchone()
-            total_validite_metier = validite_metier_resultat["total"]
-            curseur_validite_metier.close()
-
-            if not total_validite_metier:
-                await ctx.send(f"{profession.capitalize()} n'est pas un métier valide. Veuillez choisir parmi les métiers disponibles.")
-            else:
-                # Exécution de la requête SQL pour vérifier si le métier existe déjà
-                requete_existence = "SELECT COUNT(*) as total FROM metiers WHERE user = %s AND metierName = %s"
-                valeurs_existence = (discord_user_id, profession.capitalize())
-
-                curseur_existence = connexion_mysql.cursor(dictionary=True)
-                curseur_existence.execute(requete_existence, valeurs_existence)
-                existence_resultat = curseur_existence.fetchone()
-                total_existence = existence_resultat["total"]
-                curseur_existence.close()
-
-                if total_existence:
-                    await ctx.send(f"Vous avez déjà enregistré le métier de {profession.capitalize()}. Utilisez /update {profession.capitalize()} <niveau> pour mettre à jour le niveau.")
-                else:
-                    # Exécution de la requête SQL pour enregistrer le métier pour l'utilisateur
-                    requete_enregistrement = "INSERT INTO metiers VALUES (%s, %s, %s)"
-                    valeurs_enregistrement = (discord_user_id, profession.capitalize(), niveau)
-
-                    curseur_enregistrement = connexion_mysql.cursor(dictionary=True)
-                    curseur_enregistrement.execute(requete_enregistrement, valeurs_enregistrement)
-                    connexion_mysql.commit()  # Committer la transaction pour appliquer les changements
-                    curseur_enregistrement.close()
-
-                    await ctx.send(f"Le métier de {profession.capitalize()} a été enregistré avec succès.")
-
-        else:
-            await ctx.send("Veuillez fournir le nom du métier et le niveau.")
-
-    except mysql.connector.Error as err:
-        # Gérer les erreurs de connexion MySQL
-        print(f"Erreur de connexion MySQL : {err}")
-        await ctx.send("Erreur de connexion à la base de données. Veuillez réessayer plus tard.")
-    finally:
-        # Fermer la connexion à la base de données dans tous les cas
-        connexion_mysql.close()
-
-
-
-def normalize_apostrophe(text):
-    # Remplacez différentes formes d'apostrophes par une apostrophe simple
-    normalized_text = text.replace('‘', "'").replace('’', "'").replace('`', "'").replace('´', "'")
-    return normalized_text
-
-
-
-
-@bot.command(name='updateMetier')
-async def updateMetier(ctx, *, args):
-    try:
+@tree.command(description='Ajouter un métier', guild=discord.Object(guild_id))
+@discord.app_commands.describe(metier="Nom du métier", lvl="Niveau du métier")
+async def add(interaction: discord.Interaction, metier: str, lvl: int) :
+    
+    try : 
+        
         # Connexion à la base de données
         connexion_mysql = mysql.connector.connect(**config_mysql)
 
-        # Récupération de l'ID de l'utilisateur Discord qui a rentré la commande
-        discord_user_id = ctx.author.id
+        #Récupération de l'id de l'utilisateur
+        user = interaction.user.id
 
-        # Diviser les arguments
-        arguments = args.split()
+        # Vérifier si le métier est valide en le comparant avec la table possibleMetiers
+        requete_validite_metier = "SELECT COUNT(*) as total FROM possibleMetiers WHERE name = %s"
+        valeurs_validite_metier = (metier.capitalize(),)
 
-        # Vérifier s'il y a suffisamment d'arguments
-        if len(arguments) >= 2:
-            profession = ' '.join(arguments[:-1])  # Tout sauf le dernier argument est le nom du métier
-            profession = normalize_apostrophe(profession)
-            niveau = arguments[-1]  # Le dernier argument est le niveau
+        curseur_validite_metier = connexion_mysql.cursor(dictionary=True)
+        curseur_validite_metier.execute(requete_validite_metier, valeurs_validite_metier)
+        validite_metier_resultat = curseur_validite_metier.fetchone()
+        total_validite_metier = validite_metier_resultat["total"]
+        curseur_validite_metier.close()
 
-            # Normaliser le nom du métier
-            profession = normalize_apostrophe(profession)
-
-            # Vérifier si le métier existe déjà pour l'utilisateur
+        if not total_validite_metier:
+            await interaction.response.send_message(f"{metier.capitalize()} n'est pas un métier valide. Veuillez choisir parmi les métiers disponibles.")
+        else :
+            # Exécution de la requête SQL pour vérifier si le métier existe déjà
             requete_existence = "SELECT COUNT(*) as total FROM metiers WHERE user = %s AND metierName = %s"
-            valeurs_existence = (discord_user_id, profession.capitalize())
+            valeurs_existence = (user, metier.capitalize())
 
             curseur_existence = connexion_mysql.cursor(dictionary=True)
             curseur_existence.execute(requete_existence, valeurs_existence)
@@ -214,47 +127,115 @@ async def updateMetier(ctx, *, args):
             curseur_existence.close()
 
             if total_existence:
-                # Le métier existe, mise à jour du niveau
-                requete_update = "UPDATE metiers SET niveau = %s WHERE user = %s AND metierName = %s"
-                valeurs_update = (niveau, discord_user_id, profession.capitalize())
+                await interaction.response.send_message(f"Vous avez déjà enregistré le métier de {metier.capitalize()}. Utilisez /update {metier.capitalize()} <niveau> pour mettre à jour le niveau.")
 
-                curseur_update = connexion_mysql.cursor(dictionary=True)
-                curseur_update.execute(requete_update, valeurs_update)
-                connexion_mysql.commit()  # Committer la transaction pour appliquer les changements
-                curseur_update.close()
-
-                await ctx.send(f"Le niveau du métier {profession.capitalize()} a été mis à jour avec succès.")
             else:
-                await ctx.send(f"Vous n'avez pas encore le métier de {profession.capitalize()} enregistré. Vous pouvez l'enregistrer en utilisant la commande : `/addMetier {profession.capitalize()} {niveau}`.")
-        else:
-            await ctx.send("Veuillez fournir le nom du métier et le niveau.")
+                try :
+                    lvl = int(lvl)
+                    if lvl < 1 or lvl > 100 :
+                        await interaction.response.send_message(f"Ton niveau doit être situé entre 1 et 100.")
+                        return
+                except ValueError :
+                    await interaction.response.send_message(f"Ton niveau doit être un nombre entier.")
+                    return
+                # Exécution de la requête SQL pour enregistrer le métier pour l'utilisateur
+                requete_enregistrement = "INSERT INTO metiers VALUES (%s, %s, %s)"
+                valeurs_enregistrement = (user, metier.capitalize(), lvl)
 
-    except mysql.connector.Error as err:
+                curseur_enregistrement = connexion_mysql.cursor(dictionary=True)
+                curseur_enregistrement.execute(requete_enregistrement, valeurs_enregistrement)
+                connexion_mysql.commit()  # Committer la transaction pour appliquer les changements
+                curseur_enregistrement.close()
+
+                await interaction.response.send_message(f"Le métier {metier.capitalize()} de niveau {lvl} a été correctement ajouté pour vous, <@{user}>")
+        
+        
+    except mysql.connector.Error as err :
         # Gérer les erreurs de connexion MySQL
         print(f"Erreur de connexion MySQL : {err}")
-        await ctx.send("Erreur de connexion à la base de données. Veuillez réessayer plus tard.")
+        await interaction.response.send_message("Erreur de connexion à la base de données. Veuillez réessayer plus tard.")
     finally:
         # Fermer la connexion à la base de données dans tous les cas
         connexion_mysql.close()
 
 
+def normalize_apostrophe(text):
+    # Remplacez différentes formes d'apostrophes par une apostrophe simple
+    normalized_text = text.replace('‘', "'").replace('’', "'").replace('`', "'").replace('´', "'")
+    return normalized_text
 
 
-@bot.command(name='searchMetier')
-async def searchMetier(ctx, *, profession):
+@tree.command(description="Modifier le niveau d'un métier existant", guild=discord.Object(guild_id))
+@discord.app_commands.describe(metier="Nom du métier", lvl="Niveau du métier")
+async def update(interaction: discord.Interaction, metier: str, lvl: int) :
+    try:
+        # Connexion à la base de données
+        connexion_mysql = mysql.connector.connect(**config_mysql)
+
+        #Récupération de l'id de l'utilisateur
+        user = interaction.user.id
+
+        try:
+            lvl = int(lvl)
+            if lvl < 1 or lvl > 100:
+                await interaction.response.send_message("Le niveau de métier doit être compris entre 1 et 100.")
+                return
+        except ValueError:
+            await interaction.response.send_message("Le niveau de métier doit être un nombre entier.")
+            return
+
+        # Normaliser le nom du métier
+        metier = normalize_apostrophe(metier)
+
+        # Vérifier si le métier existe déjà pour l'utilisateur
+        requete_existence = "SELECT COUNT(*) as total FROM metiers WHERE user = %s AND metierName = %s"
+        valeurs_existence = (user, metier.capitalize())
+
+        curseur_existence = connexion_mysql.cursor(dictionary=True)
+        curseur_existence.execute(requete_existence, valeurs_existence)
+        existence_resultat = curseur_existence.fetchone()
+        total_existence = existence_resultat["total"]
+        curseur_existence.close()
+
+        if total_existence:
+            # Le métier existe, mise à jour du niveau
+            requete_update = "UPDATE metiers SET niveau = %s WHERE user = %s AND metierName = %s"
+            valeurs_update = (lvl, user, metier.capitalize())
+
+            curseur_update = connexion_mysql.cursor(dictionary=True)
+            curseur_update.execute(requete_update, valeurs_update)
+            connexion_mysql.commit()  # Committer la transaction pour appliquer les changements
+            curseur_update.close()
+
+            await interaction.response.send_message(f"Le niveau du métier {metier.capitalize()} a été mis à jour avec succès.")
+        else:
+            await interaction.response.send_message(f"Vous n'avez pas encore le métier de {metier.capitalize()} enregistré. Vous pouvez l'enregistrer en utilisant la commande : `/addMetier {metier.capitalize()} {lvl}`.")
+
+    except mysql.connector.Error as err:
+        # Gérer les erreurs de connexion MySQL
+        print(f"Erreur de connexion MySQL : {err}")
+        await interaction.response.send_message("Erreur de connexion à la base de données. Veuillez réessayer plus tard.")
+    finally:
+        # Fermer la connexion à la base de données dans tous les cas
+        connexion_mysql.close()
+
+
+@tree.command(description='Rechercher un métier', guild=discord.Object(guild_id))
+@discord.app_commands.describe(metier="Nom du métier")
+async def search(interaction: discord.Interaction, metier: str):
     try:
         # Connexion à la base de données
         connexion_mysql = mysql.connector.connect(**config_mysql)
             
         # Normaliser le nom du métier
-        profession = normalize_apostrophe(profession)
+        metier = normalize_apostrophe(metier)
 
         # Récupération des utilisateurs avec le métier spécifique, triés par niveau décroissant
-        requete_sql = "SELECT user, niveau FROM metiers WHERE metierName = %s ORDER BY niveau DESC"
-        valeurs = (profession.capitalize(),)
+        requete_sql = f'SELECT user, niveau FROM metiers WHERE metierName = "{metier.capitalize()}" ORDER BY niveau DESC'
+        print(requete_sql)
 
         curseur = connexion_mysql.cursor(dictionary=True)
-        curseur.execute(requete_sql, valeurs)
+        curseur.execute(requete_sql)
         resultats = curseur.fetchall()
         curseur.close()
 
@@ -264,12 +245,12 @@ async def searchMetier(ctx, *, profession):
             for resultat in resultats:
                 niveau = resultat['niveau']
                 utilisateur_id = resultat['user']
+                print(utilisateur_id)
 
-                # Récupérer l'objet Member
-                utilisateur = ctx.guild.get_member(utilisateur_id)
+                user = interaction.guild.get_member(utilisateur_id)
 
-                if utilisateur:
-                    utilisateur_nom = utilisateur.display_name
+                if user:
+                    utilisateur_nom = user.nick
                 else:
                     utilisateur_nom = f"Utilisateur inconnu ({utilisateur_id})"
 
@@ -278,123 +259,42 @@ async def searchMetier(ctx, *, profession):
                 niveaux_utilisateurs[niveau].append(utilisateur_nom)
 
             # Créer le message de sortie
-            message_sortie = f"Joueurs ayant le métier '{profession.capitalize()}' et leurs niveaux :\n"
+            message_sortie = f"Joueurs ayant le métier '{metier.capitalize()}' et leurs niveaux :\n"
 
             for niveau, utilisateurs in niveaux_utilisateurs.items():
                 utilisateurs_str = "\n    ".join(utilisateurs)
                 message_sortie += f"\nlvl {str(niveau)} :\n    {utilisateurs_str}"
 
-            await ctx.send(message_sortie)
+            await interaction.response.send_message(message_sortie)
 
         else:
-            await ctx.send(f"Aucun joueur trouvé avec le métier '{profession.capitalize()}'.")
+            await interaction.response.send_message(f"Aucun joueur trouvé avec le métier '{metier.capitalize()}'.")
 
     except mysql.connector.Error as err:
         # Gérer les erreurs de connexion MySQL
         print(f"Erreur de connexion MySQL : {err}")
-        await ctx.send("Erreur de connexion à la base de données. Veuillez réessayer plus tard.")
+        await interaction.response.send_message("Erreur de connexion à la base de données. Veuillez réessayer plus tard.")
     finally:
         # Fermer la connexion à la base de données dans tous les cas
         connexion_mysql.close()
 
 
-
-
-
-@tasks.loop(hours=336)  # 336 heures = 2 semaines
-async def search_all_metier_task():
-    await bot.wait_until_ready()
-
-    try:
-        # Connexion à la base de données
-        connexion_mysql = mysql.connector.connect(**config_mysql)
-            
-        # Récupération de tous les métiers distincts
-        requete_sql = "SELECT DISTINCT metierName FROM metiers"
-        curseur = connexion_mysql.cursor()
-        curseur.execute(requete_sql)
-        metiers = [resultat[0] for resultat in curseur.fetchall()]
-        curseur.close()
-
-        if metiers:
-            # Créer le message de sortie
-            message_sortie = "Liste de tous les métiers et niveaux :\n"
-
-            for metier in metiers:
-                # Récupération des utilisateurs avec le métier spécifique, triés par niveau décroissant
-                requete_sql_metier = "SELECT user, niveau FROM metiers WHERE metierName = %s ORDER BY niveau DESC"
-                valeurs_metier = (metier,)
-
-                curseur_metier = connexion_mysql.cursor(dictionary=True)
-                curseur_metier.execute(requete_sql_metier, valeurs_metier)
-                resultats_metier = curseur_metier.fetchall()
-                curseur_metier.close()
-
-                if resultats_metier:
-                    emoji_code = get_emoji_code(metier)
-                    if emoji_code:
-                        message_sortie += f"\n\n{emoji_code} **{metier.capitalize()}** {emoji_code} :\n"
-
-                        niveaux_utilisateurs = {}
-                        for resultat in resultats_metier:
-                            niveau = resultat['niveau']
-                            utilisateur_id = resultat['user']
-
-                            # Récupérer l'objet Member à partir du serveur
-                            serveur = bot.get_guild(1179537413505298502)  # Remplacez SERVEUR_ID par l'ID de votre serveur
-                            utilisateur = serveur.get_member(utilisateur_id)
-
-                            if utilisateur:
-                                utilisateur_nom = utilisateur.display_name
-                            else:
-                                utilisateur_nom = f"Utilisateur inconnu ({utilisateur_id})"
-
-                            if niveau not in niveaux_utilisateurs:
-                                niveaux_utilisateurs[niveau] = []
-                            niveaux_utilisateurs[niveau].append(utilisateur_nom)
-
-                        for niveau, utilisateurs in niveaux_utilisateurs.items():
-                            utilisateurs_str = "\n        ".join(utilisateurs)
-                            message_sortie += f"\n    lvl {str(niveau)} :\n        {utilisateurs_str}"
-
-            # Envoyer le message dans le canal défini
-            channel_id = 1179537759837376572  # Remplacez avec l'ID du canal où vous voulez envoyer le résultat
-            channel = bot.get_channel(channel_id)
-            if channel:
-                await channel.send(message_sortie)
-
-        else:
-            print("Aucun métier trouvé dans la base de données.")
-
-    except mysql.connector.Error as err:
-        # Gérer les erreurs de connexion MySQL
-        print(f"Erreur de connexion MySQL : {err}")
-        print("Erreur lors de l'exécution de la tâche planifiée search_all_metier_task.")
-
-    finally:
-        if 'connexion_mysql' in locals() and connexion_mysql.is_connected():
-            connexion_mysql.close()
-
-
-
-
-
-
-@bot.command(name='deleteMetier')
-async def deleteMetier(ctx, *, profession):
+@tree.command(description='Supprimer un métier', guild=discord.Object(guild_id))
+@discord.app_commands.describe(metier="Nom du métier")
+async def delete(interaction: discord.Interaction, metier: str):
     try:
         # Connexion à la base de données
         connexion_mysql = mysql.connector.connect(**config_mysql)
         
-        # Récupération de l'ID de l'utilisateur Discord qui a rentré la commande
-        discord_user_id = ctx.author.id
+        #Récupération de l'id de l'utilisateur
+        user = interaction.user.id
 
         # Normaliser le nom du métier
-        profession = normalize_apostrophe(profession)
+        metier = normalize_apostrophe(metier)
 
         # Exécution de la requête SQL pour vérifier si le métier existe
         requete_existence = "SELECT COUNT(*) as total FROM metiers WHERE user = %s AND metierName = %s"
-        valeurs_existence = (discord_user_id, profession.capitalize())
+        valeurs_existence = (user, metier.capitalize())
 
         curseur_existence = connexion_mysql.cursor(dictionary=True)
         curseur_existence.execute(requete_existence, valeurs_existence)
@@ -405,96 +305,30 @@ async def deleteMetier(ctx, *, profession):
         if total_existence:
             # Exécution de la requête SQL pour supprimer le métier
             requete_suppression = "DELETE FROM metiers WHERE user = %s AND metierName = %s"
-            valeurs_suppression = (discord_user_id, profession.capitalize())
+            valeurs_suppression = (user, metier.capitalize())
 
             curseur_suppression = connexion_mysql.cursor(dictionary=True)
             curseur_suppression.execute(requete_suppression, valeurs_suppression)
             connexion_mysql.commit()  # Committer la transaction pour appliquer les changements
             curseur_suppression.close()
 
-            await ctx.send(f"Le métier de {profession.capitalize()} a été supprimé avec succès.")
+            await interaction.response.send_message(f"Le métier de {metier.capitalize()} a été supprimé avec succès.")
         else:
-            await ctx.send(f"Vous n'avez pas enregistré le métier de {profession.capitalize()}.")
+            await interaction.response.send_message(f"Vous n'avez pas enregistré le métier de {metier.capitalize()}.")
 
     except mysql.connector.Error as err:
         # Gérer les erreurs de connexion MySQL
         print(f"Erreur de connexion MySQL : {err}")
-        await ctx.send("Erreur de connexion à la base de données. Veuillez réessayer plus tard.")
+        await interaction.response.send_message("Erreur de connexion à la base de données. Veuillez réessayer plus tard.")
     finally:
         # Fermer la connexion à la base de données dans tous les cas
         connexion_mysql.close()
 
 
 
-@bot.command(name='addMetierFor', aliases=['addMetierForSuggestion'])
-async def addMetierFor(ctx, member: discord.Member, *, args):
-    try:
-        # Diviser les arguments
-        arguments = args.split()
-
-        # Vérifier s'il y a suffisamment d'arguments
-        if len(arguments) >= 2:
-            profession = ' '.join(arguments[:-1])  # Tout sauf le dernier argument est le nom du métier
-            profession = normalize_apostrophe(profession)
-            niveau = arguments[-1]  # Le dernier argument est le niveau
-
-            # Connexion à la base de données
-            connexion_mysql = mysql.connector.connect(**config_mysql)
-
-            # Récupération de l'ID de l'utilisateur Discord mentionné
-            discord_user_id = member.id
-
-            # Vérifier si le métier est valide en le comparant avec la table possibleMetiers
-            requete_validite_metier = "SELECT COUNT(*) as total FROM possibleMetiers WHERE name = %s"
-            valeurs_validite_metier = (profession.capitalize(),)
-
-            curseur_validite_metier = connexion_mysql.cursor(dictionary=True)
-            curseur_validite_metier.execute(requete_validite_metier, valeurs_validite_metier)
-            validite_metier_resultat = curseur_validite_metier.fetchone()
-            total_validite_metier = validite_metier_resultat["total"]
-            curseur_validite_metier.close()
-
-            if not total_validite_metier:
-                await ctx.send(f"{profession.capitalize()} n'est pas un métier valide. Veuillez choisir parmi les métiers disponibles.")
-            else:
-                # Exécution de la requête SQL pour vérifier si le métier existe déjà
-                requete_existence = "SELECT COUNT(*) as total FROM metiers WHERE user = %s AND metierName = %s"
-                valeurs_existence = (discord_user_id, profession.capitalize())
-
-                curseur_existence = connexion_mysql.cursor(dictionary=True)
-                curseur_existence.execute(requete_existence, valeurs_existence)
-                existence_resultat = curseur_existence.fetchone()
-                total_existence = existence_resultat["total"]
-                curseur_existence.close()
-
-                if total_existence:
-                    await ctx.send(f"{member.mention} a déjà enregistré le métier de {profession.capitalize()}. Utilisez /update {profession.capitalize()} <niveau> pour mettre à jour le niveau.")
-                else:
-                    # Exécution de la requête SQL pour enregistrer le métier pour l'utilisateur
-                    requete_enregistrement = "INSERT INTO metiers VALUES (%s, %s, %s)"
-                    valeurs_enregistrement = (discord_user_id, profession.capitalize(), niveau)
-
-                    curseur_enregistrement = connexion_mysql.cursor(dictionary=True)
-                    curseur_enregistrement.execute(requete_enregistrement, valeurs_enregistrement)
-                    connexion_mysql.commit()  # Committer la transaction pour appliquer les changements
-                    curseur_enregistrement.close()
-
-                    await ctx.send(f"Le métier de {profession.capitalize()} pour {member.mention} a été enregistré avec succès.")
-
-        else:
-            await ctx.send("Veuillez fournir le nom du métier et le niveau.")
-
-    except mysql.connector.Error as err:
-        # Gérer les erreurs de connexion MySQL
-        print(f"Erreur de connexion MySQL : {err}")
-        await ctx.send("Erreur de connexion à la base de données. Veuillez réessayer plus tard.")
-    finally:
-        # Fermer la connexion à la base de données dans tous les cas
-        connexion_mysql.close()
-
-
-@bot.command(name='listMetier')
-async def listMetier(ctx):
+@tree.command(description='Avoir la liste de tous les métiers existants', guild=discord.Object(guild_id))
+@discord.app_commands.describe()
+async def list(interaction: discord.Interaction):
     try:
         # Connexion à la base de données
         connexion_mysql = mysql.connector.connect(**config_mysql)
@@ -509,108 +343,112 @@ async def listMetier(ctx):
 
         if liste_metiers_resultat:
             liste_metiers = [metier["name"] for metier in liste_metiers_resultat]
-            await ctx.send("Liste des métiers possibles :\n" + "\n".join(liste_metiers))
+            await interaction.response.send_message("Liste des métiers possibles :\n" + "\n".join(liste_metiers))
         else:
-            await ctx.send("Aucun métier n'est disponible.")
+            await interaction.response.send_message("Aucun métier n'est disponible.")
 
     except mysql.connector.Error as err:
         # Gérer les erreurs de connexion MySQL
         print(f"Erreur de connexion MySQL : {err}")
-        await ctx.send("Erreur de connexion à la base de données. Veuillez réessayer plus tard.")
+        await interaction.response.send_message("Erreur de connexion à la base de données. Veuillez réessayer plus tard.")
     finally:
         # Fermer la connexion à la base de données dans tous les cas
         connexion_mysql.close()
 
 
 
-
-
-
-
-@bot.event
-async def on_ready():
-    print(f"Connecté en tant que {bot.user.name}")
-
-    # Connexion à la base de données
-    connexion_mysql = mysql.connector.connect(**config_mysql)
-
+@tree.command(description='Ajouter un métier pour un autre utilisateur', guild=discord.Object(guild_id))
+@discord.app_commands.describe(pour="Nom de l'utilisateur pour qui vous souhaitez ajouter un métier", metier="Nom du métier", lvl="Niveau du métier")
+async def addfor(interaction: discord.Interaction, pour: str, metier: str, lvl: int):
     try:
-        # Vérifier si la table 'metiers' existe déjà
-        table_existence_query = "SHOW TABLES LIKE 'metiers';"
-        curseur_existence = connexion_mysql.cursor()
-        curseur_existence.execute(table_existence_query)
-        table_existante = curseur_existence.fetchone()
-        curseur_existence.close()
 
-        if not table_existante:
-            # La table 'metiers' n'existe pas, on la crée
-            table_creation_query = """
-            CREATE TABLE metiers (
-                user BIGINT NOT NULL,
-                metierName VARCHAR(255) NOT NULL,
-                niveau INT NOT NULL,
-                PRIMARY KEY (user, metierName)
-            );
-            """
-            try:
-                curseur = connexion_mysql.cursor()
-                curseur.execute(table_creation_query)
-                print("Table 'metiers' créée avec succès.")
-            except mysql.connector.Error as err:
-                print(f"Erreur lors de la création de la table 'metiers': {err}")
+        metier = normalize_apostrophe(metier)
 
-        # Création de la table 'possibleMetiers' avec les métiers de base (si elle n'existe pas déjà)
-        table_existence_query = "SHOW TABLES LIKE 'possibleMetiers';"
-        curseur_existence = connexion_mysql.cursor()
-        curseur_existence.execute(table_existence_query)
-        table_existante = curseur_existence.fetchone()
-        curseur_existence.close()
-        
-        if not table_existante :
-            table_metiers_possibles_query = """
-            CREATE TABLE IF NOT EXISTS possibleMetiers (
-                name VARCHAR(255) NOT NULL,
-                PRIMARY KEY (name)
-            );
-            """
-            metiers_possibles = [
-                'Paysan', 'Boulanger', 'Bijoutier', 'Bûcheron', 'Cordonnier', 'Mineur', 'Tailleur',
-                'Chasseur', 'Boucher', 'Sculpteur d\'arc', 'Sculpteur de bâton', 'Sculpteur de baguette',
-                'Pêcheur', 'Poissonnier', 'Forgeur de dague', 'Forgeur de marteau', 'Forgeur d\'épée',
-                'Forgeur de pelle', 'Forgeur de hache', 'Alchimiste', 'Forgeur de bouclier', 'Bricoleur',
-                'Sculptemage d\'arc', 'Sculptemage de bâton', 'Sculptemage de baguette', 'Joaillomage',
-                'Cordomage', 'Costumage', 'Forgemage de dague', 'Forgemage de marteau', 'Forgemage d\'épée',
-                'Forgemage de pelle', 'Forgemage de hache'
-            ]
+        try:
+            lvl = int(lvl)
+            if lvl < 1 or lvl > 100:
+                await interaction.response.send_message("Le niveau de métier doit être compris entre 1 et 100.")
+                return
+        except ValueError:
+            await interaction.response.send_message("Le niveau de métier doit être un nombre entier.")
+            return
 
-            try:
-                curseur_metiers_possibles = connexion_mysql.cursor()
-                curseur_metiers_possibles.execute(table_metiers_possibles_query)
-              
-                # Insérer les valeurs uniquement si la table a été créée
-                for metier in metiers_possibles:
-                    insert_query = "INSERT INTO possibleMetiers (name) VALUES (%s)"
-                    valeurs_insert = (metier,)
-                    curseur_insert = connexion_mysql.cursor(dictionary=True)
-                    curseur_insert.execute(insert_query, valeurs_insert)
-                    connexion_mysql.commit()
-                    print(f"Metier {metier} créé dans la table")
-                print("Table 'possibleMetiers' créée avec succès.")
-        
-            except mysql.connector.Error as err:
-                print(f"Erreur lors de la création de la table 'possibleMetiers': {err}")
-        
-        cog = MonCog(bot)
-        await bot.add_cog(cog)
-        search_all_metier_task.start()
+        # Connexion à la base de données
+        connexion_mysql = mysql.connector.connect(**config_mysql)
 
+        # Récupération de l'ID de l'utilisateur Discord mentionné
+        pour = interaction.guild.get_member_named(pour).id
+
+        # Vérifier si le métier est valide en le comparant avec la table possibleMetiers
+        requete_validite_metier = "SELECT COUNT(*) as total FROM possibleMetiers WHERE name = %s"
+        valeurs_validite_metier = (metier.capitalize(),)
+
+        curseur_validite_metier = connexion_mysql.cursor(dictionary=True)
+        curseur_validite_metier.execute(requete_validite_metier, valeurs_validite_metier)
+        validite_metier_resultat = curseur_validite_metier.fetchone()
+        total_validite_metier = validite_metier_resultat["total"]
+        curseur_validite_metier.close()
+
+        if not total_validite_metier:
+            await interaction.response.send_message(f"{metier.capitalize()} n'est pas un métier valide. Veuillez choisir parmi les métiers disponibles.")
+        else:
+            # Exécution de la requête SQL pour vérifier si le métier existe déjà
+            requete_existence = "SELECT COUNT(*) as total FROM metiers WHERE user = %s AND metierName = %s"
+            valeurs_existence = (pour, metier.capitalize())
+
+            curseur_existence = connexion_mysql.cursor(dictionary=True)
+            curseur_existence.execute(requete_existence, valeurs_existence)
+            existence_resultat = curseur_existence.fetchone()
+            total_existence = existence_resultat["total"]
+            curseur_existence.close()
+
+            if total_existence:
+                pour = interaction.guild.get_member(pour)
+                pour_nom = pour.nick
+                await interaction.response.send_message(f"{pour_nom} a déjà enregistré le métier de {metier.capitalize()}. Utilisez /update {metier.capitalize()} <niveau> pour mettre à jour le niveau.")
+            else:
+                # Exécution de la requête SQL pour enregistrer le métier pour l'utilisateur
+                requete_enregistrement = "INSERT INTO metiers VALUES (%s, %s, %s)"
+                valeurs_enregistrement = (pour, metier.capitalize(), lvl)
+
+                curseur_enregistrement = connexion_mysql.cursor(dictionary=True)
+                curseur_enregistrement.execute(requete_enregistrement, valeurs_enregistrement)
+                connexion_mysql.commit()  # Committer la transaction pour appliquer les changements
+                curseur_enregistrement.close()
+                pour = interaction.guild.get_member(pour)
+                pour_nom = pour.nick
+                await interaction.response.send_message(f"Le métier de {metier.capitalize()} pour {pour_nom} a été enregistré avec succès.")
+
+
+    except mysql.connector.Error as err:
+        # Gérer les erreurs de connexion MySQL
+        print(f"Erreur de connexion MySQL : {err}")
+        await interaction.response.send_message("Erreur de connexion à la base de données. Veuillez réessayer plus tard.")
     finally:
-        # Fermez la connexion à la base de données dans tous les cas
+        # Fermer la connexion à la base de données dans tous les cas
         connexion_mysql.close()
 
 
+@tree.command(description='Voir tous mes métiers et leurs lvl', guild=discord.Object(guild_id))
+@discord.app_commands.describe()
+async def watchme(interaction: discord.Interaction):
+    connexion_mysql = mysql.connector.connect(**config_mysql)
+    user = interaction.user.id
 
+    requete_my_metier = "SELECT metierName, niveau FROM metiers WHERE user = %s"
+    valeurs_my_metier = (user,)
 
+    curseur_my_metier = connexion_mysql.cursor()
+    curseur_my_metier.execute(requete_my_metier, valeurs_my_metier)
+    my_metiers = curseur_my_metier.fetchall()
+    curseur_my_metier.close()
 
+    if my_metiers:
+        metiers_str = "\n".join([f"{metier[0]} (niveau {metier[1]})" for metier in my_metiers])
+        await interaction.response.send_message(f"Vos métiers :\n{metiers_str}")
+    else:
+        await interaction.response.send_message("Vous n'avez pas encore de métier.")
 
-bot.run(bot_token)
+# add the token of your bot
+client.run(bot_token)
+# client.run('your-bot-token-here')
